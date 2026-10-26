@@ -47,14 +47,19 @@ export function handoffDir(): string {
   return process.env.JEV_BROWSER_HANDOFF_DIR || resolve(homedir(), ".jev-browser", "handoff");
 }
 
+// uid ownership and permission modes are POSIX concepts: Windows stat has no
+// uid and synthesizes modes, so those checks only apply where they mean
+// something. Realpath, inode, nlink and file-type checks run on every platform.
+const POSIX_PERMS = process.platform !== "win32";
+
 /** The handoff directory must be a private directory owned by this user. */
 export async function ensureHandoffDir(dir = handoffDir()): Promise<void> {
   const resolved = resolve(dir);
   const st = await lstat(resolved).catch(() => null);
   if (st) {
     if (!st.isDirectory()) throw new Error(`handoff directory ${resolved} is not a directory`);
-    if (st.uid !== process.getuid!()) throw new Error(`handoff directory ${resolved} is not owned by this user`);
-    if ((st.mode & 0o777) !== 0o700) {
+    if (POSIX_PERMS && st.uid !== process.getuid!()) throw new Error(`handoff directory ${resolved} is not owned by this user`);
+    if (POSIX_PERMS && (st.mode & 0o777) !== 0o700) {
       throw new Error(`handoff directory ${resolved} must be mode 0700; run chmod 700 on it or point JEV_BROWSER_HANDOFF_DIR elsewhere`);
     }
   } else {
@@ -73,8 +78,8 @@ export async function ensureHandoffDir(dir = handoffDir()): Promise<void> {
     real === null ||
     real !== resolved ||
     !after?.isDirectory() ||
-    after.uid !== process.getuid!() ||
-    (after.mode & 0o777) !== 0o700
+    (POSIX_PERMS && after.uid !== process.getuid!()) ||
+    (POSIX_PERMS && (after.mode & 0o777) !== 0o700)
   ) {
     throw new Error(`handoff directory ${resolved} must be a symlink-free 0700 directory owned by this user`);
   }
@@ -162,8 +167,8 @@ export async function readHandoffSecret(path: string, dir = handoffDir(), what =
   try {
     const st = await fh.stat(); // fstat on the pinned descriptor
     if (!st.isFile()) throw new Error(`${what} is not a regular file`);
-    if (st.uid !== process.getuid!()) throw new Error(`${what} is not owned by this user`);
-    if ((st.mode & 0o777) !== 0o600) throw new Error(`${what} must be mode 0600; run chmod 600 on it and retry`);
+    if (POSIX_PERMS && st.uid !== process.getuid!()) throw new Error(`${what} is not owned by this user`);
+    if (POSIX_PERMS && (st.mode & 0o777) !== 0o600) throw new Error(`${what} must be mode 0600; run chmod 600 on it and retry`);
     if (st.nlink !== 1) throw new Error(`${what} has multiple hard links`);
     if (st.size === 0) throw new Error(`${what} is empty`);
     if (st.size > MAX_SECRET_BYTES) throw new Error(`${what} exceeds ${MAX_SECRET_BYTES} bytes`);

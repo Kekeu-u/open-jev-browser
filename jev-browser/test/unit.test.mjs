@@ -460,23 +460,35 @@ test("readHandoffSecret rejects the attack shapes", async () => {
   // A handoff directory that is itself a symlink to a valid-looking directory.
   // The anchor is the symlink, so the basename-only containment rule passes
   // and only the realpath check in ensureHandoffDir can catch it.
-  const realDir = await mkdtemp(join(tmpdir(), "jev-real-"));
-  await chmod(realDir, 0o700);
-  const realFile = join(realDir, "pw");
-  await writeFile(realFile, "super-secret-value", { mode: 0o600 });
-  const linkedDir = join(dir, "linkeddir");
-  await symlink(realDir, linkedDir);
-  await assert.rejects(() => readHandoffSecret(join(linkedDir, "pw"), linkedDir), /not a directory|symlink-free/);
-  await rm(realDir, { recursive: true, force: true });
+  // Symlink fixtures are POSIX-only: creating them needs privileges on
+  // Windows (and their type semantics differ), while the realpath check they
+  // exercise in ensureHandoffDir runs on every platform regardless.
+  const POSIX_PERMS = process.platform !== "win32";
+  if (POSIX_PERMS) {
+    const realDir = await mkdtemp(join(tmpdir(), "jev-real-"));
+    await chmod(realDir, 0o700);
+    const realFile = join(realDir, "pw");
+    await writeFile(realFile, "super-secret-value", { mode: 0o600 });
+    const linkedDir = join(dir, "linkeddir");
+    await symlink(realDir, linkedDir);
+    await assert.rejects(() => readHandoffSecret(join(linkedDir, "pw"), linkedDir), /not a directory|symlink-free/);
+    await rm(realDir, { recursive: true, force: true });
 
-  const linked = join(dir, "linked");
-  await symlink(good, linked);
-  await assert.rejects(() => readHandoffSecret(linked, dir), /symlink|ELOOP|no such/i);
+    const linked = join(dir, "linked");
+    await symlink(good, linked);
+    await assert.rejects(() => readHandoffSecret(linked, dir), /symlink|ELOOP|no such/i);
+  }
 
   const loose = join(dir, "loose");
   await writeFile(loose, "super-secret-value", { mode: 0o644 });
-  await assert.rejects(() => readHandoffSecret(loose, dir), /0600/);
-  await assert.rejects(() => stat(loose), /ENOENT/); // one-shot: consumed even on rejection
+  if (POSIX_PERMS) {
+    await assert.rejects(() => readHandoffSecret(loose, dir), /0600/);
+    await assert.rejects(() => stat(loose), /ENOENT/); // one-shot: consumed even on rejection
+  } else {
+    // No permission model on Windows: the loose file is valid there and is
+    // consumed by the read like any other.
+    assert.equal((await readHandoffSecret(loose, dir)).toString(), "super-secret-value");
+  }
 
   const hardlinked = join(dir, "hard");
   const hardSource = join(dir, "hardsrc");
@@ -580,6 +592,10 @@ test("navigate reuses an injected Playwright page and leaves its lifecycle to th
       page,
       maxSeconds: 0,
       screenshot: "none",
+      // maxSeconds 0 ends the run before any model call; the stub transport
+      // both bypasses credential resolution and turns an accidental model
+      // call into a loud failure.
+      transport: { name: "fixture", async ask() { throw new Error("model must not be called"); } },
     });
 
     assert.equal(result.status, "timeout");
@@ -687,6 +703,7 @@ test("injected credential pages suppress the screenshot even before any fill", a
       page,
       maxSeconds: 0,
       password: { value: "unit-visible-secret-value", origin: "https://example.com" },
+      transport: { name: "fixture", async ask() { throw new Error("model must not be called"); } },
     });
     assert.equal(result.status, "timeout");
     assert.equal(result.screenshot_base64_jpeg, null, "screenshot bytes must be suppressed on injected credential pages");
@@ -1380,6 +1397,11 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
+  // The fixture targets loopback on purpose; the private-net block this repo
+  // adds would abort that navigation, so the run opts out and the env is
+  // restored afterwards.
+  const savedAllowPrivateNet = process.env.JEV_BROWSER_ALLOW_PRIVATE_NET;
+  process.env.JEV_BROWSER_ALLOW_PRIVATE_NET = "1";
   try {
     // maxSeconds 0: the loop breaks at step 1 before any model call; the
     // navigation, seeding, redaction, and result assembly still run.
@@ -1388,6 +1410,7 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
       startUrl: origin + "/orders",
       maxSeconds: 0,
       cookies: [{ name: "session", value: VALUE }],
+      transport: { name: "fixture", async ask() { throw new Error("model must not be called"); } },
     });
     assert.equal(result.status, "timeout");
     // The cookie actually seeded: the document 403s without it.
@@ -1407,6 +1430,8 @@ test("cookie runs are credential runs end to end: seeded, gated, redacted, unscr
   } finally {
     await browser.close();
     server.close();
+    if (savedAllowPrivateNet === undefined) delete process.env.JEV_BROWSER_ALLOW_PRIVATE_NET;
+    else process.env.JEV_BROWSER_ALLOW_PRIVATE_NET = savedAllowPrivateNet;
   }
 });
 
