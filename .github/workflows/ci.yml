@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cli:
+    # Suíte do fork jev-browser (unit + transports + http). Os testes que
+    # lançam Chromium pulam sozinhos quando o binário não está instalado.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jev-browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        env:
+          JEV_BROWSER_SKIP_BROWSER_DOWNLOAD: "1"
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  front:
+    # Teste de fumaça do painel: o servidor exige a CLI compilada.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build da CLI (dependência do servidor)
+        working-directory: jev-browser
+        run: npm ci && npm run build
+        env:
+          JEV_BROWSER_SKIP_BROWSER_DOWNLOAD: "1"
+      - name: Smoke test do painel
+        working-directory: front
+        run: node --test

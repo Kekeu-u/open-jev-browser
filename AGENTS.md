@@ -1,4 +1,4 @@
-# AGENTS.md — jev browser lab (guia de descoberta para agentes LLM)
+# AGENTS.md — open-jev-browser (guia de descoberta para agentes LLM)
 
 Você (agente LLM) caiu num repositório que dá controle de navegador e de
 computador a quem comanda. Este arquivo te ensina a usar tudo sem perguntar

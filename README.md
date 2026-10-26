@@ -1,4 +1,6 @@
-# jev browser — painel local e comandar o Chrome com o Jev
+# open-jev-browser — painel local e comandar o Chrome com o Jev
+
+[![CI](https://github.com/Kekeu-u/open-jev-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/Kekeu-u/open-jev-browser/actions/workflows/ci.yml) [![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue.svg)](LICENSE)
 
 Automation de navegador controlada por comandos em português, com o [Jev](https://docs.typesafe.ai) (via OpenRouter) decidindo cada clique em ~0,3–0,5s por uma fração de centavo. Dois modos independentes, uma CLI, um painel web local e uma extensão Chrome.
 
@@ -134,6 +136,7 @@ jev browser/
 ├── jev.bat / jev / start.bat # atalhos por OS (delegam ao supervisor)
 ├── front/                     # painel: server.js (Node puro) + index.html
 │   ├── .env.example           # configure a chave aqui
+│   ├── test/                  # teste de fumaça do servidor (node --test)
 │   └── runs/                  # histórico: <id>.json + prints + server.log
 ├── jev-browser/               # fork do jkudish/jev-browser (MIT) com patches:
 │   │                          #   --events, --live-shot, pausa entre ações,
@@ -152,7 +155,7 @@ jev browser/
 
 - [`jkudish/jev-browser`](https://github.com/jkudish/jev-browser) — MIT. Base da CLI; os patches deste repo estão nos arquivos citados acima.
 - [`nexibeo/jev-browser-control`](https://github.com/nexibeo/jev-browser-control) — MIT. Extensão e MCP do modo Chrome real.
-- Os acréscimos próprios (front, patches, docs) não têm licença anexada ainda — adicione a sua antes de publicar.
+- Os acréscimos próprios (supervisor, front, patches, docs) estão sob a [licença MIT](LICENSE).
 
 ## Estado e roadmap
 

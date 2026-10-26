@@ -1,3 +1,5 @@
+> **Fork de [`nexibeo/jev-browser-control`](https://github.com/nexibeo/jev-browser-control) (MIT), mantido dentro do [open-jev-browser](../../).** O chat lateral com modos Navegador/Computador é acréscimo deste repo; abaixo, a documentação original do upstream.
+
 # Jev Browser Control
 
 Let Claude or Codex drive a real Chrome. You ask in plain words; Claude plans, and [Jev](https://docs.typesafe.ai), TypeSafe's decision model, picks each click, keystroke and scroll in about half a second for a fraction of a cent.
@@ -54,7 +56,6 @@ From a clone, `node scripts/install-agents.mjs` does all of this for Claude Code
 
 ### Extension mode: your everyday Chrome
 
-<img src="docs/img/sidepanel.png" alt="The Jev side panel in Chrome, showing Claude connected" width="320">
 
 1. **Install the extension.** Clone this repo (or download the [zip](https://jevbrowsercontrol.com/downloads/jev-browser-control-extension.zip)), open `chrome://extensions`, switch on Developer mode, click **Load unpacked** and pick the `extension/` folder.
 2. **Choose a provider** in the settings page that opens: paste an [OpenRouter key](https://openrouter.ai/settings/keys) or a `jbc_` credits key, and press **Test connection**.

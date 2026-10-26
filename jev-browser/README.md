@@ -1,10 +1,11 @@
+> **Fork de [`jkudish/jev-browser`](https://github.com/jkudish/jev-browser) (MIT), mantido dentro do [open-jev-browser](../../).** Os patches deste repo (`--events`, `--live-shot`, pausa entre ações, bloqueio de rede privada) estão no [README raiz](../README.md); abaixo, a documentação original do upstream.
+
 # Jev Browser
 
 [![CI](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml/badge.svg)](https://github.com/jkudish/jev-browser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src=".github/jev-browser-banner.png" alt="jev-browser — Fast and cheap browser use using TypeSafe's Jev model" />
 </p>
 
 Fast and very cheap browser use using TypeSafe's Jev model.
@@ -27,9 +28,7 @@ This is early software. Expect rough edges on harder sites. Issues and pull requ
 
 Searches GitHub for this repository, opens Releases, and answers a question about the page. Every Jev judgment is on the right: the action chosen, its confidence, and the goal and stuck probabilities for each step.
 
-![jev-browser searching GitHub and opening its own Releases page, judgment trace on the right](assets/github-demo.gif)
 
-Full-resolution video: [assets/github-demo.mp4](assets/github-demo.mp4).
 
 ## Install
 
