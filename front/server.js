@@ -21,7 +21,7 @@ const CLI = path.join(REPO, "dist", "index.js");
 const RUNS = path.join(ROOT, "runs");
 const PIDFILE = path.join(RUNS, ".child.pid");
 const SERVER_PIDFILE = path.join(RUNS, ".server.pid");
-const PORT = Number(process.env.FRONT_PORT || 8787);
+let PORT = Number(process.env.FRONT_PORT || 8787);
 const KEEP_RUNS = 20;
 const MAX_BODY = 100000;
 const MAX_STDOUT = 1000000;
@@ -449,6 +449,34 @@ function snapshotById(id) {
 
 // ---------- HTTP ----------
 
+// Corpo JSON com teto de tamanho, compartilhado pelas rotas POST: sem
+// application/json responde 415; estourou MAX_BODY, responde 413 e devolve
+// null; JSON inválido vira {} (cada rota valida os campos que usa).
+function readJsonBody(req, res, cb) {
+  if (!/application\/json/i.test(req.headers["content-type"] || "")) {
+    res.writeHead(415, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ error: "Content-Type precisa ser application/json." }));
+  }
+  let raw = "", tooBig = false;
+  req.on("data", (d) => {
+    if (tooBig) return;
+    raw += d;
+    if (raw.length > MAX_BODY) {
+      tooBig = true;
+      raw = "";
+      res.writeHead(413, { "Content-Type": "application/json", "Connection": "close" });
+      res.end(JSON.stringify({ error: "Corpo da requisição grande demais." }), () => req.destroy());
+    }
+  });
+  req.on("end", () => {
+    if (tooBig) return;
+    let body = {};
+    try { body = JSON.parse(raw || "{}"); } catch {}
+    if (!body || typeof body !== "object" || Array.isArray(body)) body = {};
+    cb(body);
+  });
+}
+
 const server = http.createServer((req, res) => {
   let u;
   try {
@@ -512,24 +540,7 @@ const server = http.createServer((req, res) => {
   // Configuração da chave pelo painel: valida com o provedor ANTES de gravar.
   // Sem rede: salva com aviso. Chave rejeitada (401/403): não grava nada.
   if (req.method === "POST" && u.pathname === "/api/chave") {
-    if (!/application\/json/i.test(req.headers["content-type"] || "")) {
-      res.writeHead(415, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ error: "Content-Type precisa ser application/json." }));
-    }
-    let raw = "", tooBig = false;
-    req.on("data", (d) => {
-      if (tooBig) return;
-      raw += d;
-      if (raw.length > MAX_BODY) {
-        tooBig = true;
-        res.writeHead(413, { "Content-Type": "application/json", "Connection": "close" });
-        res.end(JSON.stringify({ error: "Corpo da requisição grande demais." }), () => req.destroy());
-      }
-    });
-    req.on("end", async () => {
-      if (tooBig) return;
-      let body = {};
-      try { body = JSON.parse(raw || "{}"); } catch {}
+    readJsonBody(req, res, async (body) => {
       const chave = typeof body.chave === "string" ? body.chave.trim() : "";
       let alvo = null;
       if (/^sk-or-[A-Za-z0-9_-]{10,}$/.test(chave)) alvo = "openrouter";
@@ -644,26 +655,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === "POST" && u.pathname === "/api/run") {
-    if (!/application\/json/i.test(req.headers["content-type"] || "")) {
-      res.writeHead(415, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ error: "Content-Type precisa ser application/json." }));
-    }
-    let raw = "", tooBig = false;
-    req.on("data", (d) => {
-      if (tooBig) return;
-      raw += d;
-      if (raw.length > MAX_BODY) {
-        tooBig = true;
-        raw = "";
-        res.writeHead(413, { "Content-Type": "application/json", "Connection": "close" });
-        res.end(JSON.stringify({ error: "Corpo da requisição grande demais." }), () => req.destroy());
-      }
-    });
-    req.on("end", () => {
-      if (tooBig) return;
-      let body = {};
-      try { body = JSON.parse(raw || "{}"); } catch {}
-      if (!body || typeof body !== "object" || Array.isArray(body)) body = {};
+    readJsonBody(req, res, (body) => {
       enqueueRun(body, (payload) => {
         res.writeHead(payload.status, { "Content-Type": "application/json" });
         if (payload.status === 202) {
@@ -696,6 +688,9 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
+  // FRONT_PORT=0: o sistema escolheu a porta — guardas de origem e log passam
+  // a usar a real da escuta.
+  PORT = server.address().port;
   try { fs.writeFileSync(SERVER_PIDFILE, String(process.pid)); } catch {}
   console.log(`jev front em http://127.0.0.1:${PORT}`);
 });

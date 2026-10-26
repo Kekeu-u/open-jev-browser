@@ -96,8 +96,6 @@ async function cmdSetup() {
   say("\nSetup completo. Suba o servico com:  node jev.mjs start");
 }
 
-const sep = () => (IS_WIN ? "\\" : "/");
-
 async function cmdStart() {
   if (!nodeVersionOk()) return die(`Precisa de Node 22+ (você está no ${process.versions.node}).`);
   if (!existsSync(SERVER)) return die("front/server.js não encontrado — rode da raiz do projeto.");
@@ -127,7 +125,7 @@ async function cmdStart() {
     mkdirSync(RUNS, { recursive: true });
     if (existsSync(LOG) && statSync(LOG).size > 1_000_000) writeFileSync(LOG, "");
   } catch {}
-  const logFd = (() => { try { return fsOpenAppend(LOG); } catch { return "ignore"; } })();
+  const logFd = (() => { try { return openSync(LOG, "a"); } catch { return "ignore"; } })();
 
   // Detached em TODAS as plataformas: o servidor escapa do grupo/console de
   // quem o lançou (fecha o terminal, o serviço continua). No POSIX vira grupo
@@ -163,8 +161,6 @@ async function cmdStart() {
   killTree(child.pid);
   die("O servidor nao respondeu em 10s. Veja front/runs/server.log.");
 }
-
-function fsOpenAppend(file) { return openSync(file, "a"); }
 
 async function cmdStop() {
   const s = await status();
