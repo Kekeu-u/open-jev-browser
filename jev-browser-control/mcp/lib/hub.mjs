@@ -46,6 +46,9 @@ export class Hub {
     this.allowed = allowedExtensionIds;
     this.home = home || process.env.JBC_HOME || join(homedir(), '.jev-browser-control');
     this.log = log;
+    // This server's own client id (owner requests); peers get one per connection.
+    // The extension uses it to keep each agent's "last tab" separate.
+    this.clientId = randomBytes(6).toString('hex');
     this.mode = null; // 'owner' | 'peer'
     this.extension = null;
     this.extensionInfo = null;
@@ -146,6 +149,9 @@ export class Hub {
   }
 
   attachPeer(conn) {
+    // The owner stamps every forwarded request with THIS connection's id —
+    // a peer cannot claim (or spoof) another client's identity.
+    const peerId = randomBytes(6).toString('hex');
     this.peers.add(conn);
     conn.on('close', () => this.peers.delete(conn));
     conn.on('message', async (data) => {
@@ -153,7 +159,7 @@ export class Hub {
       try { msg = JSON.parse(data); } catch { return; }
       if (msg.type !== 'request') return;
       try {
-        const result = await this.request(msg.method, msg.params, { timeoutMs: msg.timeoutMs, onEvent: (event) => conn.send({ type: 'event', id: msg.id, event }) });
+        const result = await this.request(msg.method, msg.params, { timeoutMs: msg.timeoutMs, client: peerId, onEvent: (event) => conn.send({ type: 'event', id: msg.id, event }) });
         conn.send({ type: 'response', id: msg.id, result });
       } catch (err) {
         conn.send({ type: 'response', id: msg.id, error: { message: err.message, code: err.code } });
@@ -212,11 +218,11 @@ export class Hub {
 
   // ---------- requests ----------
 
-  async request(method, params = {}, { timeoutMs = 60_000, onEvent } = {}) {
+  async request(method, params = {}, { timeoutMs = 60_000, onEvent, client } = {}) {
     if (this.mode === 'owner' && this.local) {
       let timer;
       const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`The browser did not answer within ${Math.round(timeoutMs / 1000)} s.`)), timeoutMs); });
-      try { return await Promise.race([this.local.handle(method, params, { onEvent }), timeout]); } finally { clearTimeout(timer); }
+      try { return await Promise.race([this.local.handle(method, params, { onEvent, client: client || this.clientId }), timeout]); } finally { clearTimeout(timer); }
     }
     if (this.mode === 'owner') {
       if (!this.extension || !this.extensionInfo) await this.waitForExtension(4000);
@@ -232,7 +238,7 @@ export class Hub {
         reject(new Error(`The browser did not answer within ${Math.round(timeoutMs / 1000)} s.`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, onEvent, timer });
-      const msg = { type: 'request', id, method, params, timeoutMs };
+      const msg = { type: 'request', id, method, params, timeoutMs, client: client || this.clientId };
       if (this.mode === 'owner') this.extension.send(msg);
       else this.peerSocket.send(msg);
     });

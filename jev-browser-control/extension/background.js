@@ -22,14 +22,30 @@ function broadcast(msg) {
   for (const p of ports) { try { p.postMessage(msg); } catch {} }
 }
 
-async function currentTabId(params = {}) {
+// "Last tab" memory is per agent (per MCP session): the bridge stamps every
+// request with a client id, so two agents pointing at "their" tab never
+// navigate each other's page away. Requests without a client id (older
+// servers, the side panel) keep the single legacy pointer.
+async function rememberTab(tabId, client) {
+  if (!client) return void chrome.storage.session.set({ claudeTab: tabId });
+  const { agentTabs = {} } = await chrome.storage.session.get('agentTabs');
+  agentTabs[client] = tabId;
+  await chrome.storage.session.set({ agentTabs });
+}
+
+async function lastTabOf(client) {
+  if (!client) return (await chrome.storage.session.get('claudeTab')).claudeTab;
+  return (await chrome.storage.session.get('agentTabs')).agentTabs?.[client];
+}
+
+async function currentTabId(params = {}, client) {
   if (params.tabId) {
     await chrome.tabs.get(params.tabId).catch(() => { throw new Error(`No tab with id ${params.tabId}. Call browser_tabs to list tabs.`); });
     return params.tabId;
   }
-  const { claudeTab } = await chrome.storage.session.get('claudeTab');
-  if (claudeTab) {
-    const tab = await chrome.tabs.get(claudeTab).catch(() => null);
+  const ptr = await lastTabOf(client);
+  if (ptr) {
+    const tab = await chrome.tabs.get(ptr).catch(() => null);
     if (tab) return tab.id;
   }
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -37,10 +53,6 @@ async function currentTabId(params = {}) {
   const [any] = await chrome.tabs.query({ active: true });
   if (!any) throw new Error('No open tab. Call browser_navigate with newTab: true.');
   return any.id;
-}
-
-async function rememberTab(tabId) {
-  await chrome.storage.session.set({ claudeTab: tabId });
 }
 
 async function groupTab(tabId, settings) {
@@ -59,11 +71,11 @@ async function groupTab(tabId, settings) {
   } catch {}
 }
 
-async function driverFor(params, settings) {
-  const tabId = await currentTabId(params);
+async function driverFor(params, settings, client) {
+  const tabId = await currentTabId(params, client);
   const tab = await chrome.tabs.get(tabId);
   if (isBlocked(settings, tab.url)) throw new Error(`${new URL(tab.url).hostname} is on the blocked list in Jev Browser Control settings.`);
-  return new ChromeDriver(tabId, { inputMode: settings.inputMode, onTab: (id) => rememberTab(id) });
+  return new ChromeDriver(tabId, { inputMode: settings.inputMode, onTab: (id) => rememberTab(id, client) });
 }
 
 function checkUrl(url, settings) {
@@ -98,7 +110,7 @@ function askPanel({ label, url, taskId, source }) {
 
 // ---------- the Jev task runner (shared by Claude and the side panel) ----------
 
-async function startTask({ goal, details, url, tabId, newTab, maxSteps, maxSeconds, allowIrreversible }, { emit = () => {}, source }) {
+async function startTask({ goal, details, url, tabId, newTab, maxSteps, maxSeconds, allowIrreversible }, { emit = () => {}, source, client } = {}) {
   const settings = await loadSettings();
   if (!goal || !String(goal).trim()) throw new Error('Give Jev a goal.');
   let id = tabId;
@@ -108,16 +120,17 @@ async function startTask({ goal, details, url, tabId, newTab, maxSteps, maxSecon
     id = tab.id;
     await groupTab(id, settings);
   }
-  const driver = await driverFor({ tabId: id }, settings);
+  const driver = await driverFor({ tabId: id }, settings, client);
   if (url && !newTab) {
     const current = (await chrome.tabs.get(driver.tabId)).url;
     if (current !== url) await driver.navigate(checkUrl(url, settings));
   }
-  if (source === 'claude') await rememberTab(driver.tabId);
+  if (client) await rememberTab(driver.tabId, client);
+  else if (source === 'claude') await rememberTab(driver.tabId);
 
   const taskId = crypto.randomUUID();
   const abort = new AbortController();
-  tasks.set(taskId, { abort, tabId: driver.tabId, source, goal });
+  tasks.set(taskId, { abort, tabId: driver.tabId, source, client, goal });
   const provider = makeProvider(settings);
   const onEvent = (event) => {
     const e = { ...event, taskId, source };
@@ -146,23 +159,23 @@ async function startTask({ goal, details, url, tabId, newTab, maxSteps, maxSecon
 // ---------- request handlers (method names used by the MCP server) ----------
 
 const handlers = {
-  async status() {
+  async status(_params, ctx = {}) {
     const settings = await loadSettings();
-    const tabId = await currentTabId().catch(() => null);
+    const tabId = await currentTabId({}, ctx.client).catch(() => null);
     const tab = tabId ? await chrome.tabs.get(tabId).catch(() => null) : null;
     return { version: VERSION, extensionId: chrome.runtime.id, settings: describe(settings), current_tab: tab && { tabId: tab.id, url: tab.url, title: tab.title }, running_tasks: [...tasks.values()].map((t) => ({ goal: t.goal, tabId: t.tabId, source: t.source })) };
   },
 
-  async 'tabs.list'() {
+  async 'tabs.list'(_params, ctx = {}) {
     const tabs = await chrome.tabs.query({});
-    const { claudeTab } = await chrome.storage.session.get('claudeTab');
-    return tabs.map((t) => ({ tabId: t.id, windowId: t.windowId, active: t.active, current: t.id === claudeTab, title: t.title, url: t.url }));
+    const ptr = await lastTabOf(ctx.client);
+    return tabs.map((t) => ({ tabId: t.id, windowId: t.windowId, active: t.active, current: t.id === ptr, title: t.title, url: t.url }));
   },
 
-  async 'tabs.select'({ tabId }) {
+  async 'tabs.select'({ tabId }, ctx = {}) {
     const tab = await chrome.tabs.update(tabId, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-    await rememberTab(tabId);
+    await rememberTab(tabId, ctx.client);
     return { tabId, url: tab.url, title: tab.title };
   },
 
@@ -171,34 +184,34 @@ const handlers = {
     return { closed: tabId };
   },
 
-  async navigate(params) {
+  async navigate(params, ctx = {}) {
     const settings = await loadSettings();
     const url = checkUrl(params.url, settings);
     if (params.newTab) {
       const tab = await chrome.tabs.create({ url, active: true });
-      await rememberTab(tab.id);
+      await rememberTab(tab.id, ctx.client);
       await groupTab(tab.id, settings);
       const driver = new ChromeDriver(tab.id, { inputMode: settings.inputMode });
       await driver.waitForLoad(15000);
       return brief(driver);
     }
-    const driver = await driverFor(params, settings);
-    await rememberTab(driver.tabId);
+    const driver = await driverFor(params, settings, ctx.client);
+    await rememberTab(driver.tabId, ctx.client);
     await driver.navigate(url);
     return brief(driver);
   },
 
-  async snapshot(params) {
+  async snapshot(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
-    await rememberTab(driver.tabId);
+    const driver = await driverFor(params, settings, ctx.client);
+    await rememberTab(driver.tabId, ctx.client);
     const page = await driver.observe({ viewportOnly: !params.full, max: params.full ? 500 : 240, textChars: params.full ? 12000 : 6000, includeDisabled: true });
     return { tabId: driver.tabId, page };
   },
 
   async click(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     if (ctx.source === 'remote' && settings.confirmIrreversible !== false) {
       const p = await driver.run('prepare', { ref: Number(params.ref), kind: 'click' });
       if (p?.label && (IRREVERSIBLE.test(p.label) || p.publishes)) {
@@ -212,9 +225,9 @@ const handlers = {
     return { ...r, ...(await brief(driver)) };
   },
 
-  async hover(params) {
+  async hover(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     const r = await driver.hover(Number(params.ref));
     await driver.wait(250);
     return { ...r, ...(await brief(driver)) };
@@ -228,9 +241,9 @@ const handlers = {
     throw new Error('browser_record works when the MCP server runs its own Chrome (browser mode), not through the extension.');
   },
 
-  async type(params) {
+  async type(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     const r = await driver.fill(Number(params.ref), String(params.text ?? ''));
     await driver.settle({ kind: 'fill', ref: Number(params.ref) });
     if (params.submit) { await driver.pressKey('Enter', Number(params.ref)); await driver.settle({ kind: 'enter' }); }
@@ -238,40 +251,40 @@ const handlers = {
     return { ...r, ...(await brief(driver)) };
   },
 
-  async select(params) {
+  async select(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     const r = await driver.select(Number(params.ref), { label: params.option, value: params.value });
     await driver.settle({ kind: 'select' });
     return { ...r, ...(await brief(driver)) };
   },
 
-  async key(params) {
+  async key(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     const r = await driver.pressKey(params.key, params.ref ? Number(params.ref) : undefined);
     await driver.settle({ kind: 'key' });
     return { ...r, ...(await brief(driver)) };
   },
 
-  async scroll(params) {
+  async scroll(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     await driver.scroll(params.direction || 'down', params.amount);
     return brief(driver);
   },
 
-  async history(params) {
+  async history(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     if (params.direction === 'forward') await driver.forward();
     else await driver.back();
     return brief(driver);
   },
 
-  async wait(params) {
+  async wait(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     const until = Date.now() + Math.min(30, Number(params.seconds) || 5) * 1000;
     if (!params.text) { await new Promise((r) => setTimeout(r, until - Date.now())); return brief(driver); }
     while (Date.now() < until) {
@@ -282,15 +295,15 @@ const handlers = {
     return { found: false, ...(await brief(driver)) };
   },
 
-  async read(params) {
+  async read(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     return driver.read({ format: params.format || 'markdown', offset: params.offset || 0, limit: Math.min(params.limit || 20000, 100000) });
   },
 
-  async screenshot(params) {
+  async screenshot(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     return driver.screenshot({ quality: params.quality || 70 });
   },
 
@@ -298,21 +311,28 @@ const handlers = {
     return startTask(params, ctx);
   },
 
-  async 'jev.find'(params) {
+  async 'jev.find'(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     return findElement({ description: params.description, driver, provider: makeProvider(settings), settings });
   },
 
-  async 'jev.check'(params) {
+  async 'jev.check'(params, ctx = {}) {
     const settings = await loadSettings();
-    const driver = await driverFor(params, settings);
+    const driver = await driverFor(params, settings, ctx.client);
     return checkPage({ statement: params.statement, driver, provider: makeProvider(settings), settings });
   },
 
-  async 'jev.stop'() {
-    for (const t of tasks.values()) t.abort.abort();
-    return { stopped: tasks.size };
+  async 'jev.stop'(_params, ctx = {}) {
+    // Scoped: an agent stops only its own tasks. Without a client id (older
+    // servers) the legacy behavior stays — stop everything.
+    let stopped = 0;
+    for (const t of tasks.values()) {
+      if (ctx.client && t.client !== ctx.client) continue;
+      t.abort.abort();
+      stopped++;
+    }
+    return { stopped };
   },
 };
 

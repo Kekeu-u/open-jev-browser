@@ -52,6 +52,20 @@ const KEYS = {
 };
 const MODIFIERS = { Alt: 1, Control: 2, Ctrl: 2, Meta: 4, Cmd: 4, Command: 4, Shift: 8 };
 
+// Escrita serializada por aba: dois agentes agindo na mesma aba intercalariam
+// eventos de input no CDP e quebrariam os refs do snapshot um do outro. O lock
+// cobre todo caminho de mutação (handlers MCP, tarefas Jev e painel), porque
+// todos passam por aqui; leituras (observe, read) continuam paralelas.
+const tabLocks = new Map(); // tabId -> promise que fecha a fila
+async function withTabLock(tabId, fn) {
+  const prev = tabLocks.get(tabId) || Promise.resolve();
+  const run = prev.then(fn, fn); // roda mesmo se o anterior falhou: o erro é do anterior
+  const tail = run.then(() => {}, () => {});
+  tabLocks.set(tabId, tail);
+  run.finally(() => { if (tabLocks.get(tabId) === tail) tabLocks.delete(tabId); }).catch(() => {});
+  return run;
+}
+
 export class ChromeDriver {
   constructor(tabId, { inputMode = 'debugger', onTab } = {}) {
     this.tabId = tabId;
@@ -132,113 +146,131 @@ export class ChromeDriver {
   }
 
   async click(ref, { guard, key, strict = false } = {}) {
-    const p = await this.prepare(ref, { kind: 'click', guard, key, strict });
-    await this.withNewTabWatch(async () => {
-      if (await this.useDebugger()) {
-        await this.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
-        await this.cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1 });
-        await this.cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 });
-      } else {
-        await this.run('domClick', { ref });
-      }
+    return withTabLock(this.tabId, async () => {
+      const p = await this.prepare(ref, { kind: 'click', guard, key, strict });
+      await this.withNewTabWatch(async () => {
+        if (await this.useDebugger()) {
+          await this.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+          await this.cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+          await this.cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+        } else {
+          await this.run('domClick', { ref });
+        }
+      });
+      return { clicked: p.label };
     });
-    return { clicked: p.label };
   }
 
   // Move the pointer onto an element without clicking (hover menus, reaction pickers, tooltips).
   async hover(ref) {
-    const p = await this.prepare(ref, { kind: 'hover' });
-    if (await this.useDebugger()) await this.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
-    else await this.run('domHover', { ref });
-    return { hovered: p.label };
+    return withTabLock(this.tabId, async () => {
+      const p = await this.prepare(ref, { kind: 'hover' });
+      if (await this.useDebugger()) await this.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y });
+      else await this.run('domHover', { ref });
+      return { hovered: p.label };
+    });
   }
 
   async fill(ref, text, { guard } = {}) {
-    const p = await this.prepare(ref, { kind: 'fill', guard });
-    if (p.formatted) {
-      // date/time/month inputs ignore inserted text; set the ISO value the way a picker would.
-      const r = await this.run('domFill', { ref, text });
-      if (r?.error) throw new Error('Could not set the field.');
-      if (text && !r.value) throw new Error(`The field rejected "${text}". Use the format it expects (e.g. 2026-10-20 for dates, 19:30 for times).`);
-      return { typed: text, into: p.label };
-    }
-    if (await this.useDebugger()) {
-      await this.cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1 });
-      await this.cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 });
-      const mod = IS_MAC ? 4 : 2;
-      await this.cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: mod, commands: ['selectAll'] });
-      await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: mod });
-      if (text) await this.cdp('Input.insertText', { text });
-      else {
-        await this.cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-        await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    return withTabLock(this.tabId, async () => {
+      const p = await this.prepare(ref, { kind: 'fill', guard });
+      if (p.formatted) {
+        // date/time/month inputs ignore inserted text; set the ISO value the way a picker would.
+        const r = await this.run('domFill', { ref, text });
+        if (r?.error) throw new Error('Could not set the field.');
+        if (text && !r.value) throw new Error(`The field rejected "${text}". Use the format it expects (e.g. 2026-10-20 for dates, 19:30 for times).`);
+        return { typed: text, into: p.label };
       }
-    } else {
-      await this.run('domFill', { ref, text });
-    }
-    return { typed: text, into: p.label };
+      if (await this.useDebugger()) {
+        await this.cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+        await this.cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 });
+        const mod = IS_MAC ? 4 : 2;
+        await this.cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: mod, commands: ['selectAll'] });
+        await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: mod });
+        if (text) await this.cdp('Input.insertText', { text });
+        else {
+          await this.cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+          await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+        }
+      } else {
+        await this.run('domFill', { ref, text });
+      }
+      return { typed: text, into: p.label };
+    });
   }
 
   async select(ref, option) {
-    const r = await this.run('select', { ref, value: option.value, label: option.label });
-    if (r?.error === 'stale') throw new StaleError(r.reason);
-    if (r?.error) throw new Error(r.reason);
-    return r;
+    return withTabLock(this.tabId, async () => {
+      const r = await this.run('select', { ref, value: option.value, label: option.label });
+      if (r?.error === 'stale') throw new StaleError(r.reason);
+      if (r?.error) throw new Error(r.reason);
+      return r;
+    });
   }
 
   // key: "Enter", "Tab", "Escape", "ArrowDown", "a", or a combo like "Control+A" / "Meta+L".
   async pressKey(combo, ref) {
-    const parts = String(combo).split('+');
-    const name = parts.pop();
-    const modifiers = parts.reduce((m, p) => m | (MODIFIERS[p] || 0), 0);
-    const spec = KEYS[name] || (name.length === 1 ? { code: /[a-z]/i.test(name) ? `Key${name.toUpperCase()}` : '', keyCode: name.toUpperCase().charCodeAt(0), text: name } : null);
-    if (!spec) throw new Error(`Unknown key "${name}"`);
-    const key = spec.key || name;
-    if (ref) await this.prepare(ref, { kind: 'key' }).catch(() => {});
-    await this.withNewTabWatch(async () => {
-      if (await this.useDebugger()) {
-        const text = modifiers & ~8 ? undefined : spec.text;
-        await this.cdp('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, modifiers, ...(text ? { text, unmodifiedText: text } : {}) });
-        await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, modifiers });
-      } else {
-        await this.run('domKey', { ref, key, code: spec.code });
-      }
+    return withTabLock(this.tabId, async () => {
+      const parts = String(combo).split('+');
+      const name = parts.pop();
+      const modifiers = parts.reduce((m, p) => m | (MODIFIERS[p] || 0), 0);
+      const spec = KEYS[name] || (name.length === 1 ? { code: /[a-z]/i.test(name) ? `Key${name.toUpperCase()}` : '', keyCode: name.toUpperCase().charCodeAt(0), text: name } : null);
+      if (!spec) throw new Error(`Unknown key "${name}"`);
+      const key = spec.key || name;
+      if (ref) await this.prepare(ref, { kind: 'key' }).catch(() => {});
+      await this.withNewTabWatch(async () => {
+        if (await this.useDebugger()) {
+          const text = modifiers & ~8 ? undefined : spec.text;
+          await this.cdp('Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, modifiers, ...(text ? { text, unmodifiedText: text } : {}) });
+          await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, modifiers });
+        } else {
+          await this.run('domKey', { ref, key, code: spec.code });
+        }
+      });
+      return { pressed: combo };
     });
-    return { pressed: combo };
   }
 
   async scroll(direction = 'down', amount) {
-    const page = await this.run('observe', { viewportOnly: true, max: 0, textChars: 0, contexts: false });
-    const h = page?.viewport?.h || 800;
-    const dy = (direction === 'up' ? -1 : 1) * (amount || Math.round(h * 0.8));
-    if (await this.useDebugger()) {
-      // A wheel event at the middle of the page also scrolls a nested scroll area under the pointer.
-      await this.cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round((page?.viewport?.w || 1200) / 2), y: Math.round(h * 0.6), deltaX: 0, deltaY: dy });
-      await sleep(120);
-    } else {
-      await this.run('scroll', { dy });
-    }
-    return { scrolled: direction };
+    return withTabLock(this.tabId, async () => {
+      const page = await this.run('observe', { viewportOnly: true, max: 0, textChars: 0, contexts: false });
+      const h = page?.viewport?.h || 800;
+      const dy = (direction === 'up' ? -1 : 1) * (amount || Math.round(h * 0.8));
+      if (await this.useDebugger()) {
+        // A wheel event at the middle of the page also scrolls a nested scroll area under the pointer.
+        await this.cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: Math.round((page?.viewport?.w || 1200) / 2), y: Math.round(h * 0.6), deltaX: 0, deltaY: dy });
+        await sleep(120);
+      } else {
+        await this.run('scroll', { dy });
+      }
+      return { scrolled: direction };
+    });
   }
 
   async back() {
-    await chrome.tabs.goBack(this.tabId).catch(() => {});
-    await sleep(100);
-    await this.waitForLoad(8000);
+    return withTabLock(this.tabId, async () => {
+      await chrome.tabs.goBack(this.tabId).catch(() => {});
+      await sleep(100);
+      await this.waitForLoad(8000);
+    });
   }
 
   async forward() {
-    await chrome.tabs.goForward(this.tabId).catch(() => {});
-    await sleep(100);
-    await this.waitForLoad(8000);
+    return withTabLock(this.tabId, async () => {
+      await chrome.tabs.goForward(this.tabId).catch(() => {});
+      await sleep(100);
+      await this.waitForLoad(8000);
+    });
   }
 
   async navigate(url) {
-    await chrome.tabs.update(this.tabId, { url });
-    await sleep(100);
-    await this.waitForLoad(15000);
-    const tab = await chrome.tabs.get(this.tabId);
-    return { url: tab.url, title: tab.title };
+    return withTabLock(this.tabId, async () => {
+      await chrome.tabs.update(this.tabId, { url });
+      await sleep(100);
+      await this.waitForLoad(15000);
+      const tab = await chrome.tabs.get(this.tabId);
+      return { url: tab.url, title: tab.title };
+    });
   }
 
   async wait(ms = 100) { await sleep(ms); }

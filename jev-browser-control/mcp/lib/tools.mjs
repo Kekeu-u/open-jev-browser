@@ -1,6 +1,6 @@
 // The MCP tools Claude sees, and how each result is turned into text for Claude.
 
-const tabId = { type: 'integer', description: 'Tab to act on. Omit to use the tab Claude used last (or the active tab).' };
+const tabId = { type: 'integer', description: 'Tab to act on. Omit to use the tab this agent used last (each agent session has its own memory), or the active tab.' };
 const ref = { type: 'integer', description: 'Element number from the latest browser_snapshot, shown as [n].' };
 
 export const TOOLS = [

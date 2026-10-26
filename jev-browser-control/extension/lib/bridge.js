@@ -111,7 +111,9 @@ export class Bridge {
     if (msg.type !== 'request') return;
     const emit = (event) => this.send({ type: 'event', id: msg.id, event });
     try {
-      const result = await this.onRequest(msg.method, msg.params || {}, { emit, source: this.source });
+      // client: the bridge stamps each MCP session (owner or peer) so the
+      // extension can keep per-agent state (last tab, scoped stops).
+      const result = await this.onRequest(msg.method, msg.params || {}, { emit, source: this.source, client: msg.client });
       this.send({ type: 'response', id: msg.id, result });
     } catch (err) {
       this.send({ type: 'response', id: msg.id, error: { message: String(err?.message || err), code: err?.code } });

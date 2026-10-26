@@ -89,3 +89,33 @@ test('a second session joins as a peer, and takes over when the owner exits', as
   ext.close();
   peer.close();
 });
+
+test('every agent gets its own client id: owner and peers never share one', async () => {
+  const port = freePort();
+  const home = mkdtempSync(join(tmpdir(), 'jbc-'));
+  const owner = await new Hub({ port, version: 't', home }).start();
+  const peerA = await new Hub({ port, version: 't', home }).start();
+  const peerB = await new Hub({ port, version: 't', home }).start();
+  const clients = [];
+  const ext = await new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/extension`, { headers: { origin: EXT } });
+    ws.onopen = () => { ws.send(JSON.stringify({ type: 'hello', version: 't', extensionId: 'a'.repeat(32) })); resolve(ws); };
+    ws.onerror = () => reject(new Error('refused'));
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type !== 'request') return;
+      clients.push(msg.client);
+      ws.send(JSON.stringify({ type: 'response', id: msg.id, result: { ok: true } }));
+    };
+  });
+  await owner.request('status');
+  await peerA.request('status');
+  await peerB.request('status');
+  assert.equal(clients.length, 3);
+  assert.ok(clients.every((c) => typeof c === 'string' && c.length >= 8));
+  assert.equal(new Set(clients).size, 3, 'owner and the two peers must carry distinct client ids');
+  ext.close();
+  owner.close();
+  peerA.close();
+  peerB.close();
+});
