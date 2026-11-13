@@ -291,7 +291,7 @@ const handlers = {
   async screenshot(params) {
     const settings = await loadSettings();
     const driver = await driverFor(params, settings);
-    return driver.screenshot({ quality: params.quality || 70 });
+    return driver.screenshot({ quality: params.quality || 70, format: params.format || 'png' });
   },
 
   async 'jev.task'(params, ctx) {

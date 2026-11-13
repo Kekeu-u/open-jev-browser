@@ -18,7 +18,9 @@ or `JBC_API_KEY=jbc_...` for jevbrowsercontrol.com credits. Then ask Claude to u
 
 **Extension mode** (`JBC_MODE=extension`). The server opens a bridge on `127.0.0.1:10522` for the Jev Browser Control extension and drives your everyday Chrome. Install the extension first: [jevbrowsercontrol.com/docs#install](https://jevbrowsercontrol.com/docs#install).
 
-Tools: `browser_status`, `browser_tabs`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_select`, `browser_hover`, `browser_press_key`, `browser_scroll`, `browser_back`, `browser_wait`, `browser_read`, `browser_screenshot`, `browser_clipboard` and `browser_record` (browser mode only), `jev_task`, `jev_find`, `jev_check`, `jev_stop`.
+Tools: `browser_status`, `browser_tabs`, `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_select`, `browser_batch`, `browser_wait_for`, `browser_hover`, `browser_press_key`, `browser_scroll`, `browser_back`, `browser_wait`, `browser_read`, `browser_screenshot`, `browser_clipboard` and `browser_record` (browser mode only), `jev_task`, `jev_find`, `jev_check`, `jev_stop`.
+
+Two of them exist to survive pages that re-render: `browser_batch` runs a list of steps and re-reads the page between them, and its steps can target elements by visible text (`label`) instead of by number; `browser_wait_for` polls until text, a regex or a URL appears. `browser_select` also handles custom dropdowns (it opens the list and clicks the matching option), and `browser_screenshot` returns PNG unless you ask for `format: "jpeg"`. Practical rules: [docs/agent-playbook.md](../docs/agent-playbook.md).
 
 Settings (in `config.env` or the environment): `CHROME_PATH` or `JBC_CHROME_CHANNEL`, `JBC_HEADLESS=1`, `JBC_PROFILE_DIR`, `JBC_MAX_STEPS`, `JBC_MAX_SECONDS`, `JBC_MAX_COST_USD`, `JBC_CONFIRM_IRREVERSIBLE=0`, `JBC_BLOCKED_SITES`, `JBC_JEV_MODEL`, `JBC_TEXT_MODEL`, `JBC_PORT`, `JBC_HOME`, `JBC_DEBUG=1`. Extension mode also takes `JBC_EXTENSION_IDS` (allowlist).
 

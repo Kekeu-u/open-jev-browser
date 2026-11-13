@@ -225,17 +225,35 @@ export class Hub {
       await new Promise((r) => setTimeout(r, 1500));
       if (!this.peerSocket) throw new Error('Reconnecting to the browser bridge; retry in a moment.');
     }
-    const id = `${process.pid}-${++this.seq}`;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`The browser did not answer within ${Math.round(timeoutMs / 1000)} s.`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, onEvent, timer });
-      const msg = { type: 'request', id, method, params, timeoutMs };
-      if (this.mode === 'owner') this.extension.send(msg);
-      else this.peerSocket.send(msg);
-    });
+    const send = () => {
+      const id = `${process.pid}-${++this.seq}`;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`The browser did not answer within ${Math.round(timeoutMs / 1000)} s.`));
+        }, timeoutMs);
+        this.pending.set(id, { resolve, reject, onEvent, timer });
+        const msg = { type: 'request', id, method, params, timeoutMs };
+        if (this.mode === 'owner') this.extension.send(msg);
+        else this.peerSocket.send(msg);
+      });
+    };
+    try {
+      return await send();
+    } catch (err) {
+      // Chrome restarts (or reloads the extension) drop the service worker mid-call. Wait for the bridge
+      // to see the extension again and repeat the request once instead of failing the action.
+      if (!/disconnected before answering|Reconnecting to the browser bridge/i.test(String(err?.message || ''))) throw err;
+      if (this.mode === 'owner') {
+        if (!(await this.waitForExtension(8000))) throw err;
+      } else {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (!this.peerSocket) throw err;
+      }
+      if (this.mode === 'owner' && !this.extension) throw err;
+      this.log(`retrying ${method} after the bridge reconnected`);
+      return send();
+    }
   }
 
   status() {

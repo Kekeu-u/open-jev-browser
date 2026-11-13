@@ -255,14 +255,16 @@ export class ChromeDriver {
     return this.run('read', opts);
   }
 
-  async screenshot({ quality = 70 } = {}) {
+  // PNG by default so the saved file matches its extension; JPEG only when a quality is asked for.
+  async screenshot({ quality = 70, format = 'png' } = {}) {
+    const jpeg = format === 'jpeg';
     if (this.inputMode !== 'dom' && (await ensureDebugger(this.tabId))) {
-      const { data } = await this.cdp('Page.captureScreenshot', { format: 'jpeg', quality });
-      return { mimeType: 'image/jpeg', data };
+      const { data } = await this.cdp('Page.captureScreenshot', jpeg ? { format: 'jpeg', quality } : { format: 'png' });
+      return { mimeType: jpeg ? 'image/jpeg' : 'image/png', data };
     }
     const tab = await chrome.tabs.get(this.tabId);
     if (!tab.active) await chrome.tabs.update(this.tabId, { active: true });
-    const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality });
-    return { mimeType: 'image/jpeg', data: url.split(',')[1] };
+    const url = await chrome.tabs.captureVisibleTab(tab.windowId, jpeg ? { format: 'jpeg', quality } : { format: 'png' });
+    return { mimeType: jpeg ? 'image/jpeg' : 'image/png', data: url.split(',')[1] };
   }
 }

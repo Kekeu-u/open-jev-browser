@@ -10,7 +10,9 @@ ao humano. Leia o `README.md` para a visão completa; aqui é o atalho operativo
 | --- | --- | --- |
 | Painel web local | `http://127.0.0.1:8787` (servidor em `front/server.js`) | Executar tarefas num Chromium isolado, com fila, eventos ao vivo e histórico |
 | Extensão Chrome | pasta `jev-browser-control/extension/` (o usuário já carregou no Chrome dele) | Agir no Chrome real do usuário, com os logins dele |
-| Ponte MCP | `node jev-browser-control/mcp/server.mjs` com `JBC_MODE=extension`, porta 10522 | Ferramentas de navegador pra você (navigate/snapshot/click/type/read + jev_task) |
+| Ponte MCP | `node jev-browser-control/mcp/server.mjs` com `JBC_MODE=extension`, porta 10522 | Ferramentas de navegador pra você (navigate/snapshot/click/type/read + batch/wait_for + jev_task) |
+| Playbook do agente | `jev-browser-control/docs/agent-playbook.md` | Regras para não tropeçar: rótulo > número, batch, wait_for, dropdowns custom, modos de página |
+| Fallback CDP | `node tools/cdp/dom.mjs <cmd>` | DOM cru e JS na página quando a extensão falha: `eval`, `query`, `html`, `click`, `type`, `shot` (ver `tools/cdp/README.md`) |
 | Controle de computador | `node native/control.mjs <cmd>` (nut.js, multiplataforma) | Mouse, teclado, captura de tela, janelas do sistema |
 | Contrato de eventos | `jev-browser/EVENTS-SCHEMA.md` | SSOT do formato de passos/eventos/HTTP |
 
