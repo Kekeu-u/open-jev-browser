@@ -281,6 +281,7 @@ async function cmdAtalho() {
     // .lnk via PowerShell (arquivo .ps1 evita inferno de aspas); Desktop real
     // via GetFolderPath (funciona com OneDrive redirecionado).
     const ps1 = join(RUNS, "atalho.ps1");
+    mkdirSync(RUNS, { recursive: true });
     writeFileSync(ps1, [
       `$d = [Environment]::GetFolderPath('Desktop')`,
       `$ws = New-Object -ComObject WScript.Shell`,
